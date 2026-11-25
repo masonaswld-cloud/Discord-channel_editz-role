@@ -1,4 +1,3 @@
-
 const express = require("express");
 const {
   Client,
@@ -19,17 +18,17 @@ const client = new Client({
 
 // Supported permissions
 const permissions = {
-  view_channel: PermissionsBitField.Flags.ViewChannel,
-  send_messages: PermissionsBitField.Flags.SendMessages,
-  add_reactions: PermissionsBitField.Flags.AddReactions,
-  manage_messages: PermissionsBitField.Flags.ManageMessages,
-  embed_links: PermissionsBitField.Flags.EmbedLinks,
-  attach_files: PermissionsBitField.Flags.AttachFiles,
-  read_message_history: PermissionsBitField.Flags.ReadMessageHistory,
-  mention_everyone: PermissionsBitField.Flags.MentionEveryone,
-  use_application_commands: PermissionsBitField.Flags.UseApplicationCommands,
-  manage_channels: PermissionsBitField.Flags.ManageChannels,
-  manage_roles: PermissionsBitField.Flags.ManageRoles
+  view_channel: ["ViewChannel", PermissionsBitField.Flags.ViewChannel],
+  send_messages: ["SendMessages", PermissionsBitField.Flags.SendMessages],
+  add_reactions: ["AddReactions", PermissionsBitField.Flags.AddReactions],
+  manage_messages: ["ManageMessages", PermissionsBitField.Flags.ManageMessages],
+  embed_links: ["EmbedLinks", PermissionsBitField.Flags.EmbedLinks],
+  attach_files: ["AttachFiles", PermissionsBitField.Flags.AttachFiles],
+  read_message_history: ["ReadMessageHistory", PermissionsBitField.Flags.ReadMessageHistory],
+  mention_everyone: ["MentionEveryone", PermissionsBitField.Flags.MentionEveryone],
+  use_application_commands: ["UseApplicationCommands", PermissionsBitField.Flags.UseApplicationCommands],
+  manage_channels: ["ManageChannels", PermissionsBitField.Flags.ManageChannels],
+  manage_roles: ["ManageRoles", PermissionsBitField.Flags.ManageRoles]
 };
 
 // Home
@@ -37,19 +36,19 @@ app.get("/", (req, res) => {
   res.json({
     ok: true,
     name: "Discord Channel Permission API",
-    version: "2.1.0"
+    version: "3.0.0"
   });
 });
 
-// Health check
+// Health
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
-// Edit multiple channel permissions
+// Edit permissions
 app.post("/edit-channel-permission", async (req, res) => {
   try {
-    // API key protection
+    // API key
     if (!API_KEY || req.headers["x-api-key"] !== API_KEY) {
       return res.status(401).json({
         ok: false,
@@ -59,21 +58,24 @@ app.post("/edit-channel-permission", async (req, res) => {
 
     const { channel_id, role_id, action } = req.body;
 
+    // Accept an array OR up to 5 BotGhost options
     let selected = req.body.permissions;
 
-    // Support old single-permission requests
-    if (!selected && req.body.permission) {
-      selected = [req.body.permission];
+    if (!selected) {
+      selected = [
+        req.body.permission,
+        req.body.permission2,
+        req.body.permission3,
+        req.body.permission4,
+        req.body.permission5
+      ];
     }
 
     if (!Array.isArray(selected)) {
-      return res.status(400).json({
-        ok: false,
-        error: "permissions must be an array"
-      });
+      selected = [selected];
     }
 
-    // Remove empty and duplicate values
+    // Remove empty and duplicate permissions
     const chosen = [...new Set(
       selected.filter(
         p => typeof p === "string" && p.trim()
@@ -87,10 +89,10 @@ app.post("/edit-channel-permission", async (req, res) => {
       });
     }
 
-    // Check permissions
+    // Validate permissions
     const invalid = chosen.filter(p => !permissions[p]);
 
-    if (invalid.length > 0) {
+    if (invalid.length) {
       return res.status(400).json({
         ok: false,
         error: "Invalid permissions",
@@ -98,7 +100,7 @@ app.post("/edit-channel-permission", async (req, res) => {
       });
     }
 
-    // Check action
+    // Validate action
     if (!["allow", "deny", "reset"].includes(action)) {
       return res.status(400).json({
         ok: false,
@@ -106,20 +108,18 @@ app.post("/edit-channel-permission", async (req, res) => {
       });
     }
 
-    // Fetch channel and guild
+    // Fetch channel
     const channel = await client.channels.fetch(channel_id);
 
-    if (!channel || !channel.guild) {
+    if (!channel || !channel.guild || !channel.permissionOverwrites) {
       return res.status(404).json({
         ok: false,
-        error: "Channel not found."
+        error: "Channel not found or unsupported."
       });
     }
 
-    const guild = channel.guild;
-
     // Fetch role
-    const role = await guild.roles.fetch(role_id);
+    const role = await channel.guild.roles.fetch(role_id);
 
     if (!role) {
       return res.status(404).json({
@@ -128,21 +128,21 @@ app.post("/edit-channel-permission", async (req, res) => {
       });
     }
 
-    // Combine permission bitfields
-    const bitfield = chosen.reduce(
-      (total, name) => total | permissions[name],
-      0n
-    );
+    // Change only the selected permissions
+    const changes = {};
 
-    // Apply selected permissions
-    const overwrite = {
-      allow: action === "allow" ? bitfield : 0n,
-      deny: action === "deny" ? bitfield : 0n
-    };
+    for (const name of chosen) {
+      const [flagName] = permissions[name];
+
+      changes[flagName] =
+        action === "allow" ? true :
+        action === "deny" ? false :
+        null;
+    }
 
     await channel.permissionOverwrites.edit(
       role.id,
-      overwrite
+      changes
     );
 
     return res.json({
@@ -164,10 +164,11 @@ app.post("/edit-channel-permission", async (req, res) => {
   }
 });
 
-// Start bot and API
+// Start API
 async function start() {
   try {
     await client.login(BOT_TOKEN);
+
     app.listen(PORT, () => {
       console.log(`API running on port ${PORT}`);
     });
