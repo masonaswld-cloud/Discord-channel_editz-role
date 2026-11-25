@@ -1,164 +1,180 @@
+
 const express = require("express");
+const {
+  Client,
+  GatewayIntentBits,
+  PermissionsBitField
+} = require("discord.js");
 
 const app = express();
-
 app.use(express.json());
 
-const PORT = process.env.PORT || 10000;
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY;
+const BOT_TOKEN = process.env.BOT_TOKEN;
 
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
+
+// Supported permissions
 const permissions = {
-  view_channel: "1024",
-  send_messages: "2048",
-  manage_messages: "8192",
-  embed_links: "16384",
-  attach_files: "32768",
-  read_message_history: "65536",
-  mention_everyone: "131072",
-  use_application_commands: "2147483648",
-  manage_channels: "16",
-  manage_roles: "268435456"
+  view_channel: PermissionsBitField.Flags.ViewChannel,
+  send_messages: PermissionsBitField.Flags.SendMessages,
+  add_reactions: PermissionsBitField.Flags.AddReactions,
+  manage_messages: PermissionsBitField.Flags.ManageMessages,
+  embed_links: PermissionsBitField.Flags.EmbedLinks,
+  attach_files: PermissionsBitField.Flags.AttachFiles,
+  read_message_history: PermissionsBitField.Flags.ReadMessageHistory,
+  mention_everyone: PermissionsBitField.Flags.MentionEveryone,
+  use_application_commands: PermissionsBitField.Flags.UseApplicationCommands,
+  manage_channels: PermissionsBitField.Flags.ManageChannels,
+  manage_roles: PermissionsBitField.Flags.ManageRoles
 };
 
-function checkApiKey(req, res, next) {
-  if (!API_KEY) {
-    return res.status(500).json({
-      ok: false,
-      error: "API_KEY is not configured."
-    });
-  }
-
-  if (req.headers["x-api-key"] !== API_KEY) {
-    return res.status(401).json({
-      ok: false,
-      error: "Unauthorized."
-    });
-  }
-
-  next();
-}
-
+// Home
 app.get("/", (req, res) => {
   res.json({
     ok: true,
     name: "Discord Channel Permission API",
-    version: "1.0.0"
+    version: "2.1.0"
   });
 });
 
+// Health check
 app.get("/health", (req, res) => {
-  res.json({
-    ok: true
-  });
+  res.json({ ok: true });
 });
 
-app.post("/edit-channel-permission", checkApiKey, async (req, res) => {
+// Edit multiple channel permissions
+app.post("/edit-channel-permission", async (req, res) => {
   try {
-    const {
-      channel_id,
-      role_id,
-      permission,
-      action
-    } = req.body;
-
-    if (!DISCORD_TOKEN) {
-      return res.status(500).json({
+    // API key protection
+    if (!API_KEY || req.headers["x-api-key"] !== API_KEY) {
+      return res.status(401).json({
         ok: false,
-        error: "DISCORD_TOKEN is not configured."
+        error: "Unauthorized"
       });
     }
 
-    if (!channel_id || !role_id || !permission || !action) {
+    const { channel_id, role_id, action } = req.body;
+
+    let selected = req.body.permissions;
+
+    // Support old single-permission requests
+    if (!selected && req.body.permission) {
+      selected = [req.body.permission];
+    }
+
+    if (!Array.isArray(selected)) {
       return res.status(400).json({
         ok: false,
-        error: "Missing required information."
+        error: "permissions must be an array"
       });
     }
 
-    const permissionName = String(permission).toLowerCase();
-    const permissionValue = permissions[permissionName];
+    // Remove empty and duplicate values
+    const chosen = [...new Set(
+      selected.filter(
+        p => typeof p === "string" && p.trim()
+      )
+    )];
 
-    if (!permissionValue) {
+    if (!channel_id || !role_id || chosen.length === 0) {
       return res.status(400).json({
         ok: false,
-        error: "Unknown permission."
+        error: "Channel, role, and at least one permission are required."
       });
     }
 
-    const selectedAction = String(action).toLowerCase();
+    // Check permissions
+    const invalid = chosen.filter(p => !permissions[p]);
 
-    if (
-      selectedAction !== "allow" &&
-      selectedAction !== "deny" &&
-      selectedAction !== "reset"
-    ) {
+    if (invalid.length > 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid permissions",
+        invalid
+      });
+    }
+
+    // Check action
+    if (!["allow", "deny", "reset"].includes(action)) {
       return res.status(400).json({
         ok: false,
         error: "Action must be allow, deny, or reset."
       });
     }
 
-    let allow = "0";
-    let deny = "0";
+    // Fetch channel and guild
+    const channel = await client.channels.fetch(channel_id);
 
-    if (selectedAction === "allow") {
-      allow = permissionValue;
-    }
-
-    if (selectedAction === "deny") {
-      deny = permissionValue;
-    }
-
-    const discordResponse = await fetch(
-      "https://discord.com/api/v10/channels/" +
-        channel_id +
-        "/permissions/" +
-        role_id,
-      {
-        method: "PUT",
-        headers: {
-          Authorization: "Bot " + DISCORD_TOKEN,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          id: String(role_id),
-          type: 0,
-          allow: allow,
-          deny: deny
-        })
-      }
-    );
-
-    if (!discordResponse.ok) {
-      const discordError = await discordResponse.text();
-
-      return res.status(discordResponse.status).json({
+    if (!channel || !channel.guild) {
+      return res.status(404).json({
         ok: false,
-        error: "Discord API request failed.",
-        discord_response: discordError
+        error: "Channel not found."
       });
     }
 
+    const guild = channel.guild;
+
+    // Fetch role
+    const role = await guild.roles.fetch(role_id);
+
+    if (!role) {
+      return res.status(404).json({
+        ok: false,
+        error: "Role not found."
+      });
+    }
+
+    // Combine permission bitfields
+    const bitfield = chosen.reduce(
+      (total, name) => total | permissions[name],
+      0n
+    );
+
+    // Apply selected permissions
+    const overwrite = {
+      allow: action === "allow" ? bitfield : 0n,
+      deny: action === "deny" ? bitfield : 0n
+    };
+
+    await channel.permissionOverwrites.edit(
+      role.id,
+      overwrite
+    );
+
     return res.json({
       ok: true,
-      message: "Channel permission updated.",
-      channel_id: String(channel_id),
-      role_id: String(role_id),
-      permission: permissionName,
-      action: selectedAction
+      message: "Channel permissions updated.",
+      channel_id,
+      role_id,
+      permissions: chosen,
+      action
     });
 
   } catch (error) {
+    console.error("Permission API error:", error);
+
     return res.status(500).json({
       ok: false,
-      error: error.message
+      error: error.message || "Internal server error"
     });
   }
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    "Discord Channel Permission API running on port " + PORT
-  );
-});
+// Start bot and API
+async function start() {
+  try {
+    await client.login(BOT_TOKEN);
+    app.listen(PORT, () => {
+      console.log(`API running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Startup error:", error);
+    process.exit(1);
+  }
+}
+
+start();
