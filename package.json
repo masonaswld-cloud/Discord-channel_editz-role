@@ -1,15 +1,13 @@
+
 {
   "name": "discord-channel-permission-api",
   "version": "1.0.0",
-  "description": "API for editing Discord channel permissions for roles.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "engines": {
-    "node": ">=20"
-  },
   "dependencies": {
+    "discord.js": "^14.27.0",
     "express": "^5.1.0"
   }
 }
