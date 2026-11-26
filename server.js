@@ -1,9 +1,5 @@
 const express = require("express");
-const {
-  Client,
-  GatewayIntentBits,
-  PermissionsBitField
-} = require("discord.js");
+const { Client, GatewayIntentBits } = require("discord.js");
 
 const app = express();
 app.use(express.json());
@@ -34,7 +30,7 @@ app.get("/", (req, res) => {
   res.json({
     ok: true,
     name: "Discord Channel Permission API",
-    version: "3.1.0"
+    version: "4.0.0"
   });
 });
 
@@ -43,7 +39,7 @@ app.post("/edit-channel-permission", async (req, res) => {
     if (req.headers["x-api-key"] !== API_KEY) {
       return res.status(401).json({
         ok: false,
-        message: "Invalid API key."
+        error: "Unauthorized."
       });
     }
 
@@ -61,72 +57,64 @@ app.post("/edit-channel-permission", async (req, res) => {
     if (!channel_id || !role_id || !permission || !action) {
       return res.status(400).json({
         ok: false,
-        message: "channel_id, role_id, permission, and action are required."
+        error: "Channel, role, permission1 and action are required."
       });
     }
 
-    const selectedPermissions = [
+    const selected = [
       permission,
       permission2,
       permission3,
       permission4,
       permission5
     ]
-      .filter(value => value && value.trim())
-      .map(value => value.trim().toLowerCase());
+      .filter(p => typeof p === "string" && p.trim() !== "")
+      .map(p => p.trim().toLowerCase());
 
-    const uniquePermissions = [...new Set(selectedPermissions)];
-
-    for (const perm of uniquePermissions) {
-      if (!permissions[perm]) {
-        return res.status(400).json({
-          ok: false,
-          message: `Invalid permission: ${perm}`
-        });
-      }
-    }
+    const unique = [...new Set(selected)];
 
     if (!["allow", "deny", "reset"].includes(action)) {
       return res.status(400).json({
         ok: false,
-        message: "Action must be allow, deny, or reset."
+        error: "Invalid action."
       });
     }
-
-    const channel = await client.channels.fetch(channel_id);
-
-    if (!channel || !channel.isTextBased()) {
-      return res.status(404).json({
-        ok: false,
-        message: "Channel not found or unsupported."
-      });
-    }
-
-    const overwrite = channel.permissionOverwrites.cache.get(role_id);
 
     const flags = {};
 
-    for (const perm of uniquePermissions) {
-      const flag = permissions[perm];
+    for (const perm of unique) {
+      if (!permissions[perm]) {
+        return res.status(400).json({
+          ok: false,
+          error: `Invalid permission: ${perm}`
+        });
+      }
 
-      flags[flag] =
+      flags[permissions[perm]] =
         action === "allow" ? true :
         action === "deny" ? false :
         null;
     }
 
-    await channel.permissionOverwrites.edit(
-      role_id,
-      flags,
-      { reason: "Permission updated through API" }
-    );
+    const channel = await client.channels.fetch(channel_id);
+
+    if (!channel || !channel.permissionOverwrites) {
+      return res.status(404).json({
+        ok: false,
+        error: "Channel not found or unsupported."
+      });
+    }
+
+    await channel.permissionOverwrites.edit(role_id, flags, {
+      reason: "Permission update through API"
+    });
 
     return res.json({
       ok: true,
       message: "Channel permissions updated.",
       channel_id,
       role_id,
-      permissions: uniquePermissions,
+      permissions: unique,
       action
     });
 
@@ -135,7 +123,7 @@ app.post("/edit-channel-permission", async (req, res) => {
 
     return res.status(500).json({
       ok: false,
-      message: error.message
+      error: error.message
     });
   }
 });
